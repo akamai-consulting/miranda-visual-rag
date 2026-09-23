@@ -10,6 +10,22 @@ actually trying to retrieve, and how should that information be
 represented?** For a fashion archive, some of that information lives in
 text and metadata; some lives in the pixels themselves.
 
+<p align="center">
+  <img
+    src="assets/miranda-289222-semantic-search.jpg"
+    alt="Miranda retrieving an Akamai PEACE FOR ALL T-shirt from a 289,222-image catalog using the query t-shirt with nerdy computer code"
+    width="100%"
+  />
+</p>
+
+<p align="center">
+  <em>
+    Querying 289,222 visual embeddings on Apple Silicon.
+    The generic query “t-shirt with nerdy computer code” retrieved
+    the Akamai PEACE FOR ALL T-shirt at #3 without mentioning Akamai.
+  </em>
+</p>
+
 ## Architecture
 
 ``` text
