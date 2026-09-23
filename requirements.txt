@@ -1,0 +1,6 @@
+torch
+open-clip-torch
+Pillow
+streamlit
+numpy
+ollama

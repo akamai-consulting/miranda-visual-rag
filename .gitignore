@@ -1,0 +1,17 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+
+# User datasets and generated indexes
+data/
+indexes/
+*.pt
+*.pth
+*.bin
+
+# Local app state
+.streamlit/secrets.toml
