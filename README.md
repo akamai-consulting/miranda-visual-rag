@@ -146,10 +146,15 @@ by Miranda and the index builder.
 
 ### 2. Install and prepare Ollama
 
-Miranda uses a local Ollama server when a query needs language
-interpretation---for example, multilingual or ambiguous input.
-Straightforward English fashion queries bypass the LLM and go directly
-to CLIP.
+Miranda is **LLM-agnostic by design**. The local LLM is an optional
+language-interpretation layer, not the retrieval engine. Straightforward
+English fashion queries bypass the LLM entirely and go directly to CLIP,
+so those searches do not require LLM inference at all.
+
+For multilingual or ambiguous queries, the current UI can use a local
+Ollama model to normalize the request into concise English search intent.
+Organizations should use models that meet their own security, governance,
+licensing, provenance, and compliance requirements.
 
 On an Apple Silicon Mac with Homebrew:
 
@@ -165,21 +170,27 @@ OLLAMA_KV_CACHE_TYPE="q8_0" \
 /opt/homebrew/opt/ollama/bin/ollama serve
 ```
 
-Leave that process running. In another terminal, pull the two models
-supported by the current Miranda UI:
+Leave that process running. In another terminal, install **only the model
+you intend to use**. The current Miranda UI supports:
 
 ``` bash
-ollama pull qwen3.5:4b
+# Option 1
 ollama pull llama3.2:3b
+
+# Option 2
+ollama pull qwen3.5:4b
 ```
 
-Verify:
+You do not need to install both models. If your organization restricts a
+particular model, simply do not download or select it.
+
+Verify the locally installed models with:
 
 ``` bash
 ollama list
 ```
 
-For the reproduced experiment, the local models were:
+For the reproduced experiment, the tested local models were:
 
 ``` text
 NAME           SIZE
@@ -187,7 +198,9 @@ llama3.2:3b    2.0 GB
 qwen3.5:4b     3.4 GB
 ```
 
-The app defaults to `qwen3.5:4b` and can also select `llama3.2:3b`.
+The LLM choice does not change Miranda's core retrieval path:
+**OpenCLIP creates the query embedding and PyTorch GEMM searches the
+catalog tensor.**
 
 > `/opt/homebrew/...` is the usual Homebrew prefix on Apple Silicon. If
 > Ollama is installed elsewhere, `ollama serve` can be used instead.
@@ -301,8 +314,10 @@ Miranda deliberately does not send every query through an LLM.
 -   Retrieval below the configured confidence threshold → do not present
     it as a confident match
 
-This separation gives each component a narrow job: the LLM interprets
-language, CLIP represents visual meaning, and GEMM performs retrieval.
+This separation gives each component a narrow job: when needed, the
+selected LLM interprets language; CLIP represents visual meaning; and
+GEMM performs retrieval. The LLM is therefore a replaceable adapter
+rather than a dependency of the retrieval engine.
 
 ## Security-by-design test cases
 
