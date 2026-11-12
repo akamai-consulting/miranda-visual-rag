@@ -9,6 +9,8 @@ import torch
 import torch.nn.functional as F
 import open_clip
 
+from grounding import interpret, GroundingError, apply_tumble_dry_mask, call_ollama_chat_json
+
 
 # ============================================================
 # CONFIG
@@ -1141,6 +1143,24 @@ for message in st.session_state.messages:
             )
 
 
+        if message.get("constraint_diagnostics"):
+            d = message["constraint_diagnostics"]
+            st.caption("Synthetic garment-care demonstration — NOT real care advice")
+            st.caption("Hard filter applied BEFORE Top-K: " + d["rule"])
+            st.caption(f"Eligible: {d['eligible']:,}; excluded: {d['rejected']:,}")
+            with st.expander("Top-5 BEFORE filtering (synthetic demonstration)"):
+                for item in d.get("before_top5", []):
+                    eligible = item["eligible"]
+                    
+                    marker = "✅" if eligible else "🚫"
+                    decision = "KEEP" if eligible else "REJECT"
+
+                    st.markdown(
+                        f"{marker} **#{item['rank']} {item['name']}** "
+                        f"— {item['score']:.3f} — "
+                        f"**{decision}**"
+                    )
+
         if message.get(
             "timing"
         ):
@@ -1301,143 +1321,23 @@ if (
             llm_ms = 0.0
 
 
-            # -------------------------------------------------
-            # ROUTE 1: NON-ASCII
-            # -------------------------------------------------
-
-            if contains_non_ascii(
-                pending_message
-            ):
-
-                st.write(
-                    "Multilingual query detected — "
-                    "normalizing to English..."
+            # All text goes through intent validation: the old English fast path
+            # could silently ignore a hard constraint or a negated property.
+            st.write("Checking whether Miranda can honor the request...")
+            llm_start = time.perf_counter()
+            try:
+                intent = interpret(
+                    pending_message,
+                    previous_query,
+                    lambda prompt: call_ollama_chat_json(prompt, pending_model),
                 )
-
-
-                llm_start = (
-                    time.perf_counter()
-                )
-
-
-                try:
-
-                    intent = normalize_multilingual_query(
-                        pending_message,
-                        previous_query,
-                        pending_model
-                    )
-
-                    llm_ok = True
-
-
-                except Exception as exc:
-
-                    llm_ok = False
-
-                    llm_error = str(
-                        exc
-                    )
-
-                    intent = {
-                        "domain": "out_of_scope",
-                        "is_followup": False,
-                        "query_en": "",
-                    }
-
-
-                llm_ms = (
-                    time.perf_counter()
-                    - llm_start
-                ) * 1000
-
-
-                route = (
-                    "multilingual → LLM normalization"
-                )
-
-
-            # -------------------------------------------------
-            # ROUTE 2: OBVIOUS ENGLISH FASHION
-            # -------------------------------------------------
-
-            elif is_obvious_english_fashion_query(
-                pending_message
-            ):
-
-                intent = {
-                    "domain": "fashion_search",
-                    "is_followup": False,
-                    "query_en": pending_message.strip(),
-                }
-
-
                 llm_ok = True
-
-
-                route = (
-                    "direct English fashion → CLIP"
-                )
-
-
-                st.write(
-                    "Direct fashion query detected — "
-                    "skipping LLM."
-                )
-
-
-            # -------------------------------------------------
-            # ROUTE 3: AMBIGUOUS ASCII
-            # -------------------------------------------------
-
-            else:
-
-                st.write(
-                    "Interpreting request..."
-                )
-
-
-                llm_start = (
-                    time.perf_counter()
-                )
-
-
-                try:
-
-                    intent = interpret_ascii_query(
-                        pending_message,
-                        previous_query,
-                        pending_model
-                    )
-
-                    llm_ok = True
-
-
-                except Exception as exc:
-
-                    llm_ok = False
-
-                    llm_error = str(
-                        exc
-                    )
-
-                    intent = {
-                        "domain": "out_of_scope",
-                        "is_followup": False,
-                        "query_en": "",
-                    }
-
-
-                llm_ms = (
-                    time.perf_counter()
-                    - llm_start
-                ) * 1000
-
-
-                route = (
-                    "ASCII → LLM interpretation"
-                )
-
+            except Exception as exc:
+                llm_ok = False
+                print(f"Grounding intent error: {exc}")
+                intent = {}
+            llm_ms = (time.perf_counter() - llm_start) * 1000
+            route = "Ollama intent validation → CLIP → GEMM → eligibility mask → Top-K"
 
             # =================================================
             # LLM FAILURE
@@ -1472,41 +1372,27 @@ if (
                 st.rerun()
 
 
-            # =================================================
-            # DOMAIN GATE
-            # =================================================
-
-            if (
-                intent["domain"]
-                != "fashion_search"
-            ):
-
-                response_text = (
-                    "I can help search the fashion archive, "
-                    "but I can't help with that request."
-                )
-
-
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "text": response_text,
-                        "catalog_size": pending_catalog_size,
-                        "llm_model": pending_model,
-                        "route": route,
-                        "interpretation": "out of scope",
-                    }
-                )
-
-
+            # Reject unsupported or uncertain conditions BEFORE retrieval.
+            if intent["domain"] != "fashion_search" or intent["decision"] != "SEARCH":
+                if intent["domain"] != "fashion_search":
+                    response_text = "I can only search the fashion archive."
+                else:
+                    response_text = (
+                        "I don't have grounded evidence to enforce that requirement. "
+                        "I won't present similarity results as if they satisfy it."
+                    )
+                st.session_state.messages.append({
+                    "role": "assistant", "text": response_text,
+                    "catalog_size": pending_catalog_size,
+                    "llm_model": pending_model,
+                    "route": route,
+                    "interpretation": intent.get("reason", "unsupported or uncertain"),
+                })
                 st.session_state.pending_message = None
                 st.session_state.pending_model = None
                 st.session_state.pending_min_score = None
                 st.session_state.pending_index_key = None
-
-
                 st.rerun()
-
 
             # =================================================
             # VALID QUERY
@@ -1617,6 +1503,42 @@ if (
                 - gemm_start
             ) * 1000
 
+
+            # Eligibility is deterministic and is enforced BEFORE Top-K.
+            # These path-derived labels are SYNTHETIC, NOT real care facts.
+            tumble_state = intent["tumble_dry"]
+            before_top5 = []
+            if tumble_state != "NONE":
+                pre_values, pre_indices = torch.topk(
+                    scores, k=min(5, scores.shape[1]), dim=-1
+                )
+                for rank, (score, idx) in enumerate(
+                    zip(pre_values[0].cpu(), pre_indices[0].cpu()), start=1
+                ):
+                    idx = int(idx)
+                    before_top5.append({
+                        "rank": rank,
+                        "name": Path(pending_paths[idx]).parent.name.replace("_", " "),
+                        "score": float(score),
+                        "eligible": (
+                            ("wool" not in str(pending_paths[idx]).lower()
+                             and "cardigan" not in str(pending_paths[idx]).lower())
+                            if tumble_state == "REQUIRED" else
+                            ("wool" in str(pending_paths[idx]).lower()
+                             or "cardigan" in str(pending_paths[idx]).lower())
+                        ),
+                    })
+            scores, constraint_diagnostics = apply_tumble_dry_mask(
+                scores, pending_paths, tumble_state
+            )
+            if constraint_diagnostics:
+                constraint_diagnostics["before_top5"] = before_top5
+                st.write("Hard eligibility mask applied BEFORE Top-K")
+                st.caption(constraint_diagnostics["rule"])
+                st.write(
+                    f"Eligible: {constraint_diagnostics['eligible']:,} | "
+                    f"Excluded: {constraint_diagnostics['rejected']:,}"
+                )
 
             # =================================================
             # TOP-K
@@ -1744,6 +1666,12 @@ if (
                 )
 
 
+            if constraint_diagnostics:
+                response_text += (
+                    " Synthetic demo metadata only; actual garment-care "
+                    "instructions have not been verified."
+                )
+
             timing = {
                 "llm_ms": llm_ms,
                 "clip_ms": clip_ms,
@@ -1776,6 +1704,8 @@ if (
                     ),
 
                     "route": route,
+
+                    "constraint_diagnostics": constraint_diagnostics,
 
                     "timing": timing,
 

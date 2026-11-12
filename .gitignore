@@ -13,5 +13,10 @@ indexes/
 *.pth
 *.bin
 
+# Emacs backup and auto-save files
+*~
+\#*\#
+.#*
+
 # Local app state
 .streamlit/secrets.toml
